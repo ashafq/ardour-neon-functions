@@ -1,0 +1,30 @@
+BasedOnStyle: LLVM
+IndentWidth: 8
+TabWidth: 8
+UseTab: ForIndentation
+BraceWrapping:
+  AfterFunction: true
+  AfterControlStatement: true
+  BeforeElse: true
+  SplitEmptyFunction: true
+BreakBeforeBraces: Allman
+ColumnLimit: 120
+AllowShortFunctionsOnASingleLine: Empty
+AllowShortBlocksOnASingleLine: false
+AllowShortCaseLabelsOnASingleLine: false
+PointerAlignment: Left
+SpaceBeforeParens: ControlStatements
+SpaceAfterCStyleCast: true
+SpacesInParentheses: false
+SpacesInSquareBrackets: false
+SpacesInContainerLiterals: false
+SpacesInAngles: false
+AlignConsecutiveAssignments: false
+AlignConsecutiveDeclarations: false
+AlignOperands: true
+AlignTrailingComments: true
+IndentCaseLabels: true
+KeepEmptyLinesAtTheStartOfBlocks: false
+Cpp11BracedListStyle: false
+SortIncludes: true
+
