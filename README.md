@@ -13,3 +13,9 @@ against default (unoptimized) implementations.
 ## Results from Raspberry Pi Zero 2
 
 ![Rasperry Pi Pico](data/pi-zero-2.png)
+
+## Results from Raspberry Pi 2 (armv7l)
+
+![Rasperry Pi Pico](data/pi2-armv7l.png)
+
+*8192 frame size did not complete in time
