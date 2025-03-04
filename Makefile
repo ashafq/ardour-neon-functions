@@ -3,15 +3,21 @@ SOURCES := arm_neon_functions.cc default_functions.cc test.cc
 OBJECTS := $(SOURCES:.cc=.o)
 CFLAGS := -std=c++20 -O3 -ffast-math -fomit-frame-pointer -fstrength-reduce -DARM_NEON_SUPPORT=1
 
-# Determine compiler and flags based on OS
-ifeq ($(shell uname), Linux)
+# Determine compiler and flags based on OS/Arch
+ifneq ($(shell uname -a | grep -c "Linux.*armv7l"), 0)
+    CXX := /usr/bin/g++
+    CFLAGS += -fopenmp -march=armv7-a -mfpu=neon -mfloat-abi=hard
+    LDFLAGS := -lm
+else ifneq ($(shell uname -a | grep -c "Linux.*aarch64"), 0)
     CXX := /usr/bin/g++
     CFLAGS += -fopenmp -march=armv8-a+simd
     LDFLAGS := -lm
-else ifeq ($(shell uname), Darwin)
+else ifneq ($(shell uname -a | grep -c "Darwin.*arm64"), 0)
     CXX := /usr/bin/clang++
     CFLAGS += -march=armv8-a+simd
     LDFLAGS := -framework accelerate
+else
+    $(error "Unsupported target: $(shell uname -a)")
 endif
 
 # Default target
