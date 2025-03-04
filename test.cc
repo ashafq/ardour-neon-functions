@@ -27,20 +27,29 @@
 #include <string.h>
 #include <time.h>
 
-void fill_rand_f32(float* dst, size_t nframes);
-float sum_abs_diff_f32(const float* src_a, const float* src_b, uint32_t nframes);
-float frandf(void);
+void
+fill_rand_f32(float* dst, size_t nframes);
+float
+sum_abs_diff_f32(const float* src_a, const float* src_b, uint32_t nframes);
+float
+frandf(void);
 
 /**
  * Default "unoptimized" functions
  **/
 
-float default_compute_peak(const float* src, uint32_t nframes, float current);
-void default_apply_gain_to_buffer(float* dst, uint32_t nframes, float gain);
-void default_mix_buffers_with_gain(float* dst, const float* src, uint32_t nframes, float gain);
-void default_mix_buffers_no_gain(float* dst, const float* src, uint32_t nframes);
-void default_copy_vector(float* dst, const float* src, uint32_t nframes);
-void default_find_peaks(const float* buf, uint32_t nsamples, float* minf, float* maxf);
+float
+default_compute_peak(const float* src, uint32_t nframes, float current);
+void
+default_apply_gain_to_buffer(float* dst, uint32_t nframes, float gain);
+void
+default_mix_buffers_with_gain(float* dst, const float* src, uint32_t nframes, float gain);
+void
+default_mix_buffers_no_gain(float* dst, const float* src, uint32_t nframes);
+void
+default_copy_vector(float* dst, const float* src, uint32_t nframes);
+void
+default_find_peaks(const float* buf, uint32_t nsamples, float* minf, float* maxf);
 
 /**
  * Optimized AVX functions
@@ -49,12 +58,18 @@ void default_find_peaks(const float* buf, uint32_t nsamples, float* minf, float*
 
 extern "C"
 {
-	LIBARDOUR_API float arm_neon_compute_peak(float const* buf, uint32_t nsamples, float current);
-	LIBARDOUR_API void arm_neon_apply_gain_to_buffer(float* buf, uint32_t nframes, float gain);
-	LIBARDOUR_API void arm_neon_copy_vector(float* dst, float const* src, uint32_t nframes);
-	LIBARDOUR_API void arm_neon_find_peaks(float const* src, uint32_t nframes, float* minf, float* maxf);
-	LIBARDOUR_API void arm_neon_mix_buffers_no_gain(float* dst, float const* src, uint32_t nframes);
-	LIBARDOUR_API void arm_neon_mix_buffers_with_gain(float* dst, float const* src, uint32_t nframes, float gain);
+	LIBARDOUR_API float
+	arm_neon_compute_peak(float const* buf, uint32_t nsamples, float current);
+	LIBARDOUR_API void
+	arm_neon_apply_gain_to_buffer(float* buf, uint32_t nframes, float gain);
+	LIBARDOUR_API void
+	arm_neon_copy_vector(float* dst, float const* src, uint32_t nframes);
+	LIBARDOUR_API void
+	arm_neon_find_peaks(float const* src, uint32_t nframes, float* minf, float* maxf);
+	LIBARDOUR_API void
+	arm_neon_mix_buffers_no_gain(float* dst, float const* src, uint32_t nframes);
+	LIBARDOUR_API void
+	arm_neon_mix_buffers_with_gain(float* dst, float const* src, uint32_t nframes, float gain);
 }
 
 #ifdef __APPLE__
@@ -102,7 +117,8 @@ extern "C"
 
 #define THRESHOLD (1.0e-6)
 
-int main(int argc, char** argv)
+int
+main(int argc, char** argv)
 {
 	size_t ITER = 1 << 24;
 
@@ -349,13 +365,15 @@ int main(int argc, char** argv)
 	free(ref_ptr);
 }
 
-float frandf(void)
+float
+frandf(void)
 {
 	const float scale = 1.0F / ((float) RAND_MAX);
 	return scale * ((float) (rand()));
 }
 
-void fill_rand_f32(float* dst, size_t nframes)
+void
+fill_rand_f32(float* dst, size_t nframes)
 {
 	const float scale = 2.0F / ((float) RAND_MAX);
 
@@ -366,7 +384,8 @@ void fill_rand_f32(float* dst, size_t nframes)
 	}
 }
 
-float sum_abs_diff_f32(const float* src_a, const float* src_b, uint32_t nframes)
+float
+sum_abs_diff_f32(const float* src_a, const float* src_b, uint32_t nframes)
 {
 	float sum = 0.0F;
 

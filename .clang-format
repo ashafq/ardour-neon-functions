@@ -27,4 +27,4 @@ IndentCaseLabels: true
 KeepEmptyLinesAtTheStartOfBlocks: false
 Cpp11BracedListStyle: false
 SortIncludes: true
-
+AlwaysBreakAfterReturnType: All

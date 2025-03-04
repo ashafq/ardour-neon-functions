@@ -9,7 +9,8 @@
 #include <cstdint>
 #include <cstring>
 
-float default_compute_peak(const float* src, uint32_t nframes, float current)
+float
+default_compute_peak(const float* src, uint32_t nframes, float current)
 {
 #if __APPLE__
 	float tmpmax = 0.0f;
@@ -24,7 +25,8 @@ float default_compute_peak(const float* src, uint32_t nframes, float current)
 #endif
 }
 
-void default_apply_gain_to_buffer(float* dst, uint32_t nframes, float gain)
+void
+default_apply_gain_to_buffer(float* dst, uint32_t nframes, float gain)
 {
 #if __APPLE__
 	vDSP_vsmul(dst, 1, &gain, dst, 1, nframes);
@@ -34,7 +36,8 @@ void default_apply_gain_to_buffer(float* dst, uint32_t nframes, float gain)
 #endif
 }
 
-void default_mix_buffers_with_gain(float* dst, const float* src, uint32_t nframes, float gain)
+void
+default_mix_buffers_with_gain(float* dst, const float* src, uint32_t nframes, float gain)
 {
 #if __APPLE__
 	vDSP_vsma(src, 1, &gain, dst, 1, dst, 1, nframes);
@@ -44,7 +47,8 @@ void default_mix_buffers_with_gain(float* dst, const float* src, uint32_t nframe
 #endif
 }
 
-void default_mix_buffers_no_gain(float* dst, const float* src, uint32_t nframes)
+void
+default_mix_buffers_no_gain(float* dst, const float* src, uint32_t nframes)
 {
 #if __APPLE__
 	vDSP_vadd(src, 1, dst, 1, dst, 1, nframes);
@@ -54,12 +58,14 @@ void default_mix_buffers_no_gain(float* dst, const float* src, uint32_t nframes)
 #endif
 }
 
-void default_copy_vector(float* dst, const float* src, uint32_t nframes)
+void
+default_copy_vector(float* dst, const float* src, uint32_t nframes)
 {
 	memcpy(dst, src, nframes * sizeof(float));
 }
 
-void default_find_peaks(const float* buf, uint32_t nframes, float* minf, float* maxf)
+void
+default_find_peaks(const float* buf, uint32_t nframes, float* minf, float* maxf)
 {
 #if __APPLE__
 	float tmpmin = 0.0f;

@@ -25,8 +25,22 @@
 
 #include <cstddef>
 
-#define NEON_START_PTR(ptr) ((void*) ((((uintptr_t) ptr) + 0xF) & ~0xf))
+/**
+ * @brief Aligns a pointer to the next 16-byte boundary
+ *
+ * @param ptr Pointer to be aligned
+ * @return void* Aligned pointer
+ */
+#define ALIGN_PTR_NEXT_16(ptr) ((void*) ((((uintptr_t) ptr) + 0xF) & ~0xf))
+
+/**
+ * @brief GCC builtin to hint the compiler that the expression is unlikely
+ */
+#if defined(__GNUC__) || defined(__clang__)
 #define UNLIKELY(x) __builtin_expect(!!(x), 0)
+#else
+#define UNLIKELY(x) (x)
+#endif
 
 #ifdef __cplusplus
 #define C_FUNC extern "C"
@@ -34,13 +48,31 @@
 #define C_FUNC
 #endif
 
-C_FUNC float arm_neon_compute_peak(const float* src, uint32_t nframes, float current)
+/**
+ * @brief Compute the absolute peak value in a buffer of floats
+ *
+ * This function computes the peak value in a buffer of floats. The function
+ * uses NEON SIMD instructions to compute the peak value, with some loop
+ * unrolling. The function is optimized for both Aarch64 and Aarch32 platforms.
+ *
+ * The performance of this function does not depend on the alignment of the
+ * input buffer, as the function handles misaligned samples before the first
+ * aligned address. However, it will be performant if the buffer is aligned to
+ * a 16-byte boundary, and the number of frames is a multiple of 16.
+ *
+ * @param[in] src Pointer to the buffer of floats
+ * @param[in] nframes Number of frames in the buffer
+ * @param[in] current Current peak value
+ * @return float
+ */
+C_FUNC float
+arm_neon_compute_peak(const float* src, uint32_t nframes, float current)
 {
 	// Broadcast single value to all elements of the register
 	float32x4_t vmax = vdupq_n_f32(current);
 
 	// Compute the next aligned pointer
-	const float* src_aligned = (const float*) NEON_START_PTR(src);
+	const float* src_aligned = (const float*) ALIGN_PTR_NEXT_16(src);
 
 	// Process misaligned samples before the first aligned address
 	if (UNLIKELY(src_aligned != src))
@@ -68,6 +100,7 @@ C_FUNC float arm_neon_compute_peak(const float* src, uint32_t nframes, float cur
 			size_t offset = 4 * 4 * i;
 			float32x4_t x0, x1, x2, x3;
 			float32x4_t max0, max1, max2;
+
 			x0 = vld1q_f32(src_aligned + offset + (0 * 4));
 			x1 = vld1q_f32(src_aligned + offset + (1 * 4));
 			x2 = vld1q_f32(src_aligned + offset + (2 * 4));
@@ -115,7 +148,27 @@ C_FUNC float arm_neon_compute_peak(const float* src, uint32_t nframes, float cur
 	return current;
 }
 
-C_FUNC void arm_neon_find_peaks(const float* src, uint32_t nframes, float* minf, float* maxf)
+/**
+ * @brief Find the minimum and maximum values in a buffer of floats
+ *
+ * This function computes the minimum and maximum values in a buffer of floats.
+ * The function uses NEON SIMD instructions to compute the min and max values,
+ * with some loop unrolling. The function is optimized for both Aarch64 and
+ * Aarch32 platforms.
+ *
+ * Similar to @p arm_neon_compute_peak, the performance of this function does
+ * not depend on the alignment of the input buffer, as the function handles
+ * misaligned samples before the first aligned address. However, it will be
+ * performant if the buffer is aligned to a 16-byte boundary, and the number of
+ * frames is a multiple of 16.
+ *
+ * @param[in] src Pointer to the buffer of floats
+ * @param[in] nframes Number of frames in the buffer
+ * @param[in,out] minf Pointer to the minimum value (gets updated)
+ * @param[in,out] maxf Pointer to the maximum value (gets updated)
+ */
+C_FUNC void
+arm_neon_find_peaks(const float* src, uint32_t nframes, float* minf, float* maxf)
 {
 	float32x4_t vmin, vmax;
 
@@ -123,7 +176,7 @@ C_FUNC void arm_neon_find_peaks(const float* src, uint32_t nframes, float* minf,
 	vmin = vld1q_dup_f32(minf);
 	vmax = vld1q_dup_f32(maxf);
 
-	const float* src_aligned = (const float*) NEON_START_PTR(src);
+	const float* src_aligned = (const float*) ALIGN_PTR_NEXT_16(src);
 
 	// Process misaligned samples before the first aligned address
 	if (UNLIKELY(src_aligned != src))
@@ -223,9 +276,25 @@ C_FUNC void arm_neon_find_peaks(const float* src, uint32_t nframes, float* minf,
 #endif
 }
 
-C_FUNC void arm_neon_apply_gain_to_buffer(float* dst, uint32_t nframes, float gain)
+/**
+ * @brief Applies a scalar gain to a buffer of floats
+ *
+ * The mathematically equivalent operation is:
+ *
+ * dst[i] = src[i] * gain, for i = 0 to nframes
+ *
+ * The function uses NEON SIMD instructions to apply the gain to the buffer.
+ * The function is optimized for both Aarch64 and Aarch32 platforms, and is
+ * designed to deal with unaligned buffer.
+ *
+ * @param[in,out] dst Pointer to the buffer of floats
+ * @param[in] nframes Number of frames in the buffer
+ * @param[in] gain Gain to apply to the buffer
+ */
+C_FUNC void
+arm_neon_apply_gain_to_buffer(float* dst, uint32_t nframes, float gain)
 {
-	float* dst_aligned = (float*) NEON_START_PTR(dst);
+	float* dst_aligned = (float*) ALIGN_PTR_NEXT_16(dst);
 
 	if (UNLIKELY(dst_aligned != dst))
 	{
@@ -305,12 +374,29 @@ C_FUNC void arm_neon_apply_gain_to_buffer(float* dst, uint32_t nframes, float ga
 	return;
 }
 
-C_FUNC void arm_neon_mix_buffers_with_gain(float* __restrict dst, const float* __restrict src, uint32_t nframes,
-                                           float gain)
+/**
+ * @brief Mixes the source buffer into the destination buffer with a gain
+ * factor.
+ *
+ * This function is mathematically equivalent to:
+ *
+ * dst[i] = dst[i] + src[i] * gain, for i = 0 to nframes, a.k.a. @p saxpy
+ *
+ * It uses ARM NEON intrinsics for vectorized processing. Although on AArch64
+ * pointer alignment is strictly not necessary, the performance is improved
+ * when the buffers are aligned to 16-byte boundaries.
+ *
+ * @warning This function *WILL CRASH* on Aarch32 if the pointers are not
+ * aligned to 16-byte boundaries.
+ *
+ * @param[in,out] dst Pointer to the destination buffer
+ * @param[in] src Pointer to the source buffer
+ * @param[in] nframes Number of frames (samples) to process
+ * @param[in] gain Gain factor to apply to each element of the source buffer
+ */
+C_FUNC void
+arm_neon_mix_buffers_with_gain(float* __restrict dst, const float* __restrict src, uint32_t nframes, float gain)
 {
-	// In Aarch64, alignment doesn't matter. But, this code will perform faster
-	// with pointers aligned to 16 byte boundaries.
-
 	size_t frame = 0;
 	size_t num_frames = nframes;
 	size_t n_frame16 = num_frames - (num_frames % 16);
@@ -383,7 +469,28 @@ C_FUNC void arm_neon_mix_buffers_with_gain(float* __restrict dst, const float* _
 	return;
 }
 
-C_FUNC void arm_neon_mix_buffers_no_gain(float* dst, const float* src, uint32_t nframes)
+/**
+ * @brief Mixes the source buffer into the destination buffer without any gain
+ * factor.
+ *
+ * Similar to @p arm_neon_mix_buffers_with_gain, this function is
+ * mathematically equivalent to:
+ *
+ * dst[i] = dst[i] + src[i], for i = 0 to nframes
+ *
+ * Same as before, it works similarly as @p arm_neon_mix_buffers_with_gain, but
+ * without any gain factor.
+ *
+ * @warning This function *WILL CRASH* on Aarch32 if the pointers are not
+ * aligned to 16-byte boundaries.
+ *
+ * @param[in,out] dst Pointer to the destination buffer
+ * @param[in] src Pointer to the source buffer
+ * @param[in] nframes Number of frames (samples) to process
+ * @param[in] gain Gain factor to apply to each element of the source buffer
+ */
+C_FUNC void
+arm_neon_mix_buffers_no_gain(float* dst, const float* src, uint32_t nframes)
 {
 	// In Aarch64, alignment doesn't matter. But, this code will perform faster
 	// with pointers aligned to 16 byte boundaries.
@@ -456,7 +563,18 @@ C_FUNC void arm_neon_mix_buffers_no_gain(float* dst, const float* src, uint32_t 
 	return;
 }
 
-C_FUNC void arm_neon_copy_vector(float* __restrict dst, const float* __restrict src, uint32_t nframes)
+/**
+ * @brief Copies a buffer of floats from source to destination
+ *
+ * Similar to:
+ * memcpy(dst, src, nframes * sizeof(float));
+ *
+ * @param[in,out] dst Pointer to the destination buffer
+ * @param[in] src Pointer to the source buffer
+ * @param[in] nframes Number of frames (samples) to process
+ */
+C_FUNC void
+arm_neon_copy_vector(float* __restrict dst, const float* __restrict src, uint32_t nframes)
 {
 	// Use NEON when buffers are aligned
 	do
