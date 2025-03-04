@@ -10,7 +10,6 @@ against default (unoptimized) implementations.
 
 ![M3 Pro](data/m3-pro.png)
 
-
 ## Results from Raspberry Pi Zero 2
 
 ![Rasperry Pi Pico](data/pi-zero-2.png)
