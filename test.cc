@@ -52,7 +52,7 @@ void
 default_find_peaks(const float* buf, uint32_t nsamples, float* minf, float* maxf);
 
 /**
- * Optimized AVX functions
+ * Optimized functions
  **/
 #define LIBARDOUR_API __attribute__((visibility("default")))
 
@@ -70,6 +70,58 @@ extern "C"
 	arm_neon_mix_buffers_no_gain(float* dst, float const* src, uint32_t nframes);
 	LIBARDOUR_API void
 	arm_neon_mix_buffers_with_gain(float* dst, float const* src, uint32_t nframes, float gain);
+}
+
+extern "C"
+{
+	LIBARDOUR_API float
+	x86_avx512f_compute_peak(float const* buf, uint32_t nsamples, float current);
+	LIBARDOUR_API void
+	x86_avx512f_apply_gain_to_buffer(float* buf, uint32_t nframes, float gain);
+	LIBARDOUR_API void
+	x86_avx512f_mix_buffers_with_gain(float* dst, float const* src, uint32_t nframes, float gain);
+	LIBARDOUR_API void
+	x86_avx512f_mix_buffers_no_gain(float* dst, float const* src, uint32_t nframes);
+	LIBARDOUR_API void
+	x86_avx512f_copy_vector(float* dst, float const* src, uint32_t nframes);
+	LIBARDOUR_API void
+	x86_avx512f_find_peaks(float const* buf, uint32_t nsamples, float* min, float* max);
+}
+
+// The optimized backend chosen at runtime.
+static float (*opt_compute_peak)(const float* src, uint32_t nframes, float current);
+static void (*opt_apply_gain_to_buffer)(float* dst, uint32_t nframes, float gain);
+static void (*opt_mix_buffers_with_gain)(float* dst, const float* src, uint32_t nframes, float gain);
+static void (*opt_mix_buffers_no_gain)(float* dst, const float* src, uint32_t nframes);
+static void (*opt_copy_vector)(float* dst, const float* src, uint32_t nframes);
+static void (*opt_find_peaks)(const float* buf, uint32_t nsamples, float* minf, float* maxf);
+
+void
+init_optimized_functions()
+{
+#if defined(__aarch64__) || defined(__arm__)
+	opt_compute_peak = &arm_neon_compute_peak;
+	opt_apply_gain_to_buffer = &arm_neon_apply_gain_to_buffer;
+	opt_mix_buffers_with_gain = &arm_neon_mix_buffers_with_gain;
+	opt_mix_buffers_no_gain = &arm_neon_mix_buffers_no_gain;
+	opt_copy_vector = &arm_neon_copy_vector;
+	opt_find_peaks = &arm_neon_find_peaks;
+#elif defined(__x86_64__) && defined(__AVX512F__)
+	opt_compute_peak = &x86_avx512f_compute_peak;
+	opt_apply_gain_to_buffer = &x86_avx512f_apply_gain_to_buffer;
+	opt_mix_buffers_with_gain = &x86_avx512f_mix_buffers_with_gain;
+	opt_mix_buffers_no_gain = &x86_avx512f_mix_buffers_no_gain;
+	opt_copy_vector = &x86_avx512f_copy_vector;
+	opt_find_peaks = &x86_avx512f_find_peaks;
+#else
+	// Fallback to default implementations if no optimized backend is available.
+	opt_compute_peak = &default_compute_peak;
+	opt_apply_gain_to_buffer = &default_apply_gain_to_buffer;
+	opt_mix_buffers_with_gain = &default_mix_buffers_with_gain;
+	opt_mix_buffers_no_gain = &default_mix_buffers_no_gain;
+	opt_copy_vector = &default_copy_vector;
+	opt_find_peaks = &default_find_peaks;
+#endif
 }
 
 #ifdef __APPLE__
@@ -120,6 +172,7 @@ extern "C"
 int
 main(int argc, char** argv)
 {
+	init_optimized_functions();
 	size_t ITER = 1 << 24;
 
 	if (argc < 3)
@@ -135,7 +188,7 @@ main(int argc, char** argv)
 
 	uint32_t nframes = atoi(argv[1]);
 	size_t alignment = atoi(argv[2]);
-	constexpr auto ALIGNMENT = size_t(32);
+	constexpr auto ALIGNMENT = size_t(128);
 
 	if (!nframes || alignment <= 0 || alignment >= ALIGNMENT)
 	{
@@ -182,12 +235,12 @@ main(int argc, char** argv)
 
 		printf(",");
 
-		MICRO_BENCH({ (void) arm_neon_compute_peak(src, nframes, 0.0F); }, ITER);
+		MICRO_BENCH({ (void) opt_compute_peak(src, nframes, 0.0F); }, ITER);
 
 		src[5] = 5.0F;
 		src[6] = -5.0F;
 		float peak_d = default_compute_peak(src, nframes, 0.0F);
-		float peak_a = arm_neon_compute_peak(src, nframes, 0.0F);
+		float peak_a = opt_compute_peak(src, nframes, 0.0F);
 
 		if (fabsf(peak_d - peak_a) < THRESHOLD)
 		{
@@ -210,14 +263,14 @@ main(int argc, char** argv)
 
 		printf(",");
 
-		MICRO_BENCH({ (void) arm_neon_find_peaks(src, nframes, &a, &b); }, ITER);
+		MICRO_BENCH({ (void) opt_find_peaks(src, nframes, &a, &b); }, ITER);
 
 		float amin, bmin, amax, bmax;
 		amin = bmin = __builtin_inf();
 		amax = bmax = 0.0F;
 
 		default_find_peaks(src, nframes, &amin, &amax);
-		arm_neon_find_peaks(src, nframes, &bmin, &bmax);
+		opt_find_peaks(src, nframes, &bmin, &bmax);
 
 		if ((fabsf(amin - bmin) < THRESHOLD) && (fabsf(amax - bmax) < THRESHOLD))
 		{
@@ -241,13 +294,13 @@ main(int argc, char** argv)
 
 		printf(",");
 
-		MICRO_BENCH({ arm_neon_apply_gain_to_buffer(src, nframes, gain); }, ITER);
+		MICRO_BENCH({ opt_apply_gain_to_buffer(src, nframes, gain); }, ITER);
 
 		fill_rand_f32(dst, nframes);
 		default_copy_vector(ref, dst, nframes);
 
 		default_apply_gain_to_buffer(ref, nframes, gain);
-		arm_neon_apply_gain_to_buffer(dst, nframes, gain);
+		opt_apply_gain_to_buffer(dst, nframes, gain);
 
 		float err = sum_abs_diff_f32(ref, dst, nframes);
 
@@ -273,7 +326,7 @@ main(int argc, char** argv)
 
 		printf(",");
 
-		MICRO_BENCH({ arm_neon_mix_buffers_no_gain(dst, src, nframes); }, ITER);
+		MICRO_BENCH({ opt_mix_buffers_no_gain(dst, src, nframes); }, ITER);
 
 		/* Unit test setup for Y += X */
 		fill_rand_f32(src, nframes);
@@ -281,7 +334,7 @@ main(int argc, char** argv)
 		default_copy_vector(ref, dst, nframes);
 
 		default_mix_buffers_no_gain(ref, src, nframes);
-		arm_neon_mix_buffers_no_gain(dst, src, nframes);
+		opt_mix_buffers_no_gain(dst, src, nframes);
 
 		float err = sum_abs_diff_f32(ref, dst, nframes);
 
@@ -307,7 +360,7 @@ main(int argc, char** argv)
 
 		printf(",");
 
-		MICRO_BENCH({ arm_neon_mix_buffers_with_gain(dst, src, nframes, gain); }, ITER);
+		MICRO_BENCH({ opt_mix_buffers_with_gain(dst, src, nframes, gain); }, ITER);
 
 		/* Unit test setup */
 		fill_rand_f32(src, nframes);
@@ -315,7 +368,7 @@ main(int argc, char** argv)
 		default_copy_vector(ref, dst, nframes);
 
 		default_mix_buffers_with_gain(ref, src, nframes, gain);
-		arm_neon_mix_buffers_with_gain(dst, src, nframes, gain);
+		opt_mix_buffers_with_gain(dst, src, nframes, gain);
 
 		float err = sum_abs_diff_f32(ref, dst, nframes);
 
@@ -339,12 +392,12 @@ main(int argc, char** argv)
 
 		printf(",");
 
-		MICRO_BENCH({ arm_neon_copy_vector(dst, src, nframes); }, ITER);
+		MICRO_BENCH({ opt_copy_vector(dst, src, nframes); }, ITER);
 
 		/* Unit test setup */
 		fill_rand_f32(src, nframes);
 		default_copy_vector(ref, src, nframes);
-		arm_neon_copy_vector(dst, src, nframes);
+		opt_copy_vector(dst, src, nframes);
 
 		float err = sum_abs_diff_f32(ref, dst, nframes);
 

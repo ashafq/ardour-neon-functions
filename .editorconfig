@@ -1,0 +1,35 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+# ----------------------------------
+# C / C++ source files
+# ----------------------------------
+[*.{c,cc,cpp,cxx,h,hpp,hxx,inl}]
+indent_style = tab
+indent_size = 8
+tab_width = 8
+max_line_length = 120
+
+# Prevent editors from "helpfully" converting tabs
+continuation_indent_size = 8
+
+# ----------------------------------
+# CMake / Makefiles
+# ----------------------------------
+[{Makefile,*.mk,*.make}]
+indent_style = tab
+indent_size = 8
+tab_width = 8
+
+# ----------------------------------
+# Scripts (reasonable defaults)
+# ----------------------------------
+[*.{sh,py}]
+indent_style = space
+indent_size = 4
+max_line_length = 120

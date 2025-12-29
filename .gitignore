@@ -1,2 +1,8 @@
 *.o
 test
+.python-version
+data/.~lock.benchmark.ods#
+*.png
+*.txt
+uv.lock
+
