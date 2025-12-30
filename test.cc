@@ -127,7 +127,7 @@ init_optimized_functions()
 #ifdef __APPLE__
 #include <mach/mach_time.h>
 
-#define MICRO_BENCH(__statement, iter)                                                                                 \
+#define MICRO_BENCH(benchmark_statement, iter)                                                                         \
 	do                                                                                                             \
 	{                                                                                                              \
 		uint64_t start = mach_absolute_time();                                                                 \
@@ -135,7 +135,7 @@ init_optimized_functions()
 		{                                                                                                      \
 			do                                                                                             \
 			{                                                                                              \
-				__statement                                                                            \
+				benchmark_statement                                                                    \
 			} while (0);                                                                                   \
 		}                                                                                                      \
 		uint64_t end = mach_absolute_time();                                                                   \
@@ -150,7 +150,7 @@ init_optimized_functions()
 #else // __APPLE__
 #include <omp.h>
 
-#define MICRO_BENCH(__statement, iter)                                                                                 \
+#define MICRO_BENCH(benchmark_statement, iter)                                                                         \
 	do                                                                                                             \
 	{                                                                                                              \
 		double start = omp_get_wtime();                                                                        \
@@ -158,7 +158,7 @@ init_optimized_functions()
 		{                                                                                                      \
 			do                                                                                             \
 			{                                                                                              \
-				__statement                                                                            \
+				benchmark_statement                                                                    \
 			} while (0);                                                                                   \
 		}                                                                                                      \
 		double end = omp_get_wtime();                                                                          \
@@ -225,11 +225,23 @@ main(int argc, char** argv)
 	fill_rand_f32(src, nframes);
 	fill_rand_f32(dst, nframes);
 
-	printf("Function,Benchmark Time (default),Benchmark Time (ARM optimized),Unit Test,Notes\n");
+	// Run some dummy calculation to warm up caches
+	{
+		float gain = frandf();
+		for (volatile long j = 0; j < 5; ++j)
+		{
+			for (long i = 0; i < ITER; ++i)
+			{
+				default_mix_buffers_with_gain(dst, src, nframes, gain);
+			}
+		}
+	}
+
+	// printf("Function,FrameSize,Benchmark Time (default),Benchmark Time (optimized),Unit Test,Notes\n");
 
 	/* Unit test: Compute peak */
 	{
-		printf("compute_peak,");
+		printf("compute_peak,%u,", nframes);
 
 		MICRO_BENCH({ (void) default_compute_peak(src, nframes, 0.0F); }, ITER);
 
@@ -251,13 +263,13 @@ main(int argc, char** argv)
 			printf(",FAIL,");
 		}
 
-		printf("\"compute_peak [def, NEON]: %e, %e\"\n", peak_d, peak_a);
+		printf("\"compute_peak [def, opt]: %e, %e\"\n", peak_d, peak_a);
 	}
 
 	/* Unit test: find_peak */
 	{
 		float a, b;
-		printf("find_peaks,");
+		printf("find_peaks,%u,", nframes);
 
 		MICRO_BENCH({ (void) default_find_peaks(src, nframes, &a, &b); }, ITER);
 
@@ -281,14 +293,14 @@ main(int argc, char** argv)
 			printf(",FAIL,");
 		}
 
-		printf("\"find_peaks [def, NEON]: (%e, %e) (%e, %e)\"\n", amin, amax, bmin, bmax);
+		printf("\"find_peaks [def, opt]: (%e, %e) (%e, %e)\"\n", amin, amax, bmin, bmax);
 	}
 
 	/* Unit test: apply_gain_to_buffer */
 	{
 		float gain = frandf();
 
-		printf("apply_gain_to_buffer,");
+		printf("apply_gain_to_buffer,%u,", nframes);
 
 		MICRO_BENCH({ default_apply_gain_to_buffer(src, nframes, gain); }, ITER);
 
@@ -320,7 +332,7 @@ main(int argc, char** argv)
 	{
 		float gain = frandf();
 
-		printf("mix_buffers_no_gain,");
+		printf("mix_buffers_no_gain,%u,", nframes);
 
 		MICRO_BENCH({ default_mix_buffers_no_gain(dst, src, nframes); }, ITER);
 
@@ -354,7 +366,7 @@ main(int argc, char** argv)
 	{
 		float gain = frandf();
 
-		printf("mix_buffers_with_gain,");
+		printf("mix_buffers_with_gain,%u,", nframes);
 
 		MICRO_BENCH({ default_mix_buffers_with_gain(dst, src, nframes, gain); }, ITER);
 
@@ -386,7 +398,7 @@ main(int argc, char** argv)
 
 	/* Unit test: copy_vector */
 	{
-		printf("copy_vector,");
+		printf("copy_vector,%u,", nframes);
 
 		MICRO_BENCH({ default_copy_vector(dst, src, nframes); }, ITER);
 

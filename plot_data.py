@@ -15,6 +15,7 @@ FRAME_RE = re.compile(r"^\s*Frame Size:\s*(\d+)\s*(.*)$")
 @dataclass
 class Row:
     fn: str
+    nframe: int
     t_default: float
     t_opt: float
     unit_test: str = ""
@@ -23,68 +24,57 @@ class Row:
 
 def parse_blocks(text: str) -> Dict[int, List[Row]]:
     """
-    Parse blocks like:
+    Parse flat CSV rows like:
 
-      Frame Size: 128 Function,Benchmark Time (default),Benchmark Time (ARM optimized),Unit Test,Notes
-      compute_peak,4.318e-09,5.577e-09,PASS,"..."
-      ...
+      Function,Frame Size,Benchmark Time (default),Benchmark Time (optimized),Unit Test Result,Notes
+      compute_peak,5,1.378587e-09,2.634015e-09,PASS,"..."
 
-    Returns: { frame_size: [Row, ...], ... }
+    Returns: { frame_size: [Row(...), ...], ... }
     """
     blocks: Dict[int, List[Row]] = {}
 
-    lines = text.splitlines()
-    i = 0
-    while i < len(lines):
-        m = FRAME_RE.match(lines[i])
-        if not m:
-            i += 1
+    # Iterate line-by-line so we can be tolerant of stray lines / comments.
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        # Optional: skip common non-data lines
+        if line.startswith("#"):
             continue
 
-        frame = int(m.group(1))
-        header_rest = m.group(2).strip()
-        # Sometimes the header is on the same line after the frame size, sometimes next line.
-        if header_rest:
-            header_line = header_rest
-            i += 1
-        else:
-            i += 1
-            if i >= len(lines):
-                break
-            header_line = lines[i].strip()
-            i += 1
+        try:
+            parsed = next(csv.reader([line]))
+        except Exception:
+            continue
 
-        # Read CSV rows until next "Frame Size:" or EOF
-        rows: List[Row] = []
-        while i < len(lines) and not FRAME_RE.match(lines[i]):
-            line = lines[i].strip()
-            i += 1
-            if not line:
-                continue
+        if not parsed:
+            continue
 
-            # Parse as CSV (handles quoted Notes field)
-            try:
-                parsed = next(csv.reader([line]))
-            except Exception:
-                continue
+        # Skip header row (case-insensitive)
+        first = parsed[0].strip().lower()
+        if first in {"function", "fn"}:
+            continue
 
-            # Expect at least: Function, default, opt, Unit Test, Notes
-            if len(parsed) < 3:
-                continue
+        # Need at least: fn, frame_size, t_default, t_opt
+        if len(parsed) < 4:
+            continue
 
-            fn = parsed[0].strip()
-            try:
-                t_def = float(parsed[1])
-                t_opt = float(parsed[2])
-            except ValueError:
-                continue
+        fn = parsed[0].strip()
 
-            unit = parsed[3].strip() if len(parsed) > 3 else ""
-            notes = parsed[4].strip() if len(parsed) > 4 else ""
-            rows.append(Row(fn=fn, t_default=t_def, t_opt=t_opt, unit_test=unit, notes=notes))
+        try:
+            frame = int(parsed[1])
+            t_def = float(parsed[2])
+            t_opt = float(parsed[3])
+        except ValueError:
+            continue
 
-        if rows:
-            blocks[frame] = rows
+        unit = parsed[4].strip() if len(parsed) > 4 else ""
+        notes = parsed[5].strip() if len(parsed) > 5 else ""
+
+        r = Row(fn=fn, nframe=frame, t_default=t_def, t_opt=t_opt,
+                unit_test=unit, notes=notes)
+
+        blocks.setdefault(frame, []).append(r)
 
     return blocks
 
@@ -179,7 +169,7 @@ def plot(frames: List[int],
 def main():
     ap = argparse.ArgumentParser(description="Plot average improvement vs frame size from benchmark log.")
     ap.add_argument("input", help="Path to the benchmark output text (or '-' for stdin)")
-    ap.add_argument("--title", default="Apple M3 Pro (VDSP vs. NEON)")
+    ap.add_argument("--title", default="Benchmark Results (Default vs. Optimized)")
     ap.add_argument("--out", default="improvement.png", help="Output PNG path (use '' to disable saving)")
     ap.add_argument("--show", action="store_true", help="Show interactive window")
     ap.add_argument("--mode", choices=["mean", "median"], default="mean")

@@ -81,30 +81,31 @@ x86_avx512f_compute_peak(const float* src, uint32_t nframes, float current)
 	// Compute the next aligned pointer
 	const float* src_aligned = (const float*) ALIGN_PTR_NEXT(src, N_ALIGNMENT);
 
+	// Broadcast the current max values to all elements of the ZMM register
+	__m512 zmax = _mm512_set1_ps(current);
+
 	// Process misaligned samples before the first aligned address
 	if (UNLIKELY(src_aligned > src))
 	{
-		// sign bit mask for absolute value
-		const __m128 mask = _mm_set_ss(-0.0f);
-		__m128 zmax = _mm_set_ss(current);
+		// Unaligned samples to process
 		size_t unaligned_count = src_aligned - src;
 
 		// Handle small number of nframes
 		size_t count = std::min<size_t>(unaligned_count, nframes);
 
-		for (size_t i = 0; i < count; i++)
+		__mmask16 load_mask = (1 << count) - 1;
+		__m512 x0 = _mm512_maskz_loadu_ps(load_mask, src);
+		x0 = _mm512_abs_ps(x0);
+		zmax = _mm512_max_ps(zmax, x0);
+		nframes -= (uint32_t)count;
+
+		if (nframes == 0)
 		{
-			__m128 x0 = _mm_load_ss(src + i);
-			x0 = _mm_andnot_ps(mask, x0); // absolute value
-			zmax = _mm_max_ss(zmax, x0);
+			// Get the max of the ZMM registers
+			current = _mm512_reduce_max_ps(zmax);
+			return current;
 		}
-
-		nframes -= count;
-		current = _mm_cvtss_f32(zmax);
 	}
-
-	// Broadcast the current max values to all elements of the ZMM register
-	__m512 zmax = _mm512_set1_ps(current);
 
 	// Compute the number of SIMD frames
 	size_t simd_count = nframes / N_SIMD;
@@ -112,22 +113,23 @@ x86_avx512f_compute_peak(const float* src, uint32_t nframes, float current)
 	size_t nframes_rem = nframes - nframes_simd;
 	size_t start = 0;
 
-	#if 0
 	if (simd_count >= 8)
 	{
 		const size_t n_loop = 8;
 		const size_t n_iter = n_loop * N_SIMD;
 		const size_t unrolled_count = simd_count / n_loop;
-		for (size_t i = start; i < unrolled_count; ++i)
+
+		for (size_t i = 0; i < unrolled_count; ++i)
 		{
 			// Compute the pointers
 			size_t offset = n_iter * i;
 			const float* ptr = src_aligned + offset;
 
-			// Prefetch distance in number of floats
-			_mm_prefetch((const char*) (ptr + 2 * n_iter), _MM_HINT_T0);
+			// Prefetch the next further data
+			_mm_prefetch((const char*) (ptr + 4 * n_iter), _MM_HINT_T0);
 
 			__m512 x0, x1, x2, x3, x4, x5, x6, x7;
+			__m512 max0, max1, max2, max3, max4, max5, max6;
 
 			// Load data from memory
 			x0 = _mm512_load_ps(ptr + (0 * N_SIMD));
@@ -150,61 +152,21 @@ x86_avx512f_compute_peak(const float* src, uint32_t nframes, float current)
 			x7 = _mm512_abs_ps(x7);
 
 			// Compute the peaks
-			x0 = _mm512_max_ps(x0, x1);
-			x2 = _mm512_max_ps(x2, x3);
-			x4 = _mm512_max_ps(x4, x5);
-			x6 = _mm512_max_ps(x6, x7);
-			x0 = _mm512_max_ps(x0, x2);
-			x4 = _mm512_max_ps(x4, x6);
-			x0 = _mm512_max_ps(x0, x4);
+			max0 = _mm512_max_ps(x0, x1);
+			max1 = _mm512_max_ps(x2, x3);
+			max2 = _mm512_max_ps(x4, x5);
+			max3 = _mm512_max_ps(x6, x7);
+			max4 = _mm512_max_ps(max0, max1);
+			max5 = _mm512_max_ps(max2, max3);
+			max6 = _mm512_max_ps(max4, max5);
 
-			zmax = _mm512_max_ps(zmax, x0);
-		}
-
-		start += unrolled_count * n_loop;
-	}
-	#endif
-
-	if (simd_count >= 4)
-	{
-		const size_t n_loop = 4;
-		const size_t n_iter = n_loop * N_SIMD;
-		const size_t unrolled_count = (simd_count - start) / n_loop;
-		for (size_t i = start; i < unrolled_count; ++i)
-		{
-			// Compute the pointers
-			size_t offset = n_iter * i + (start * N_SIMD);
-			const float* ptr = src_aligned + offset;
-
-			// Prefetch distance in number of floats
-			_mm_prefetch((const char*) (ptr +  n_loop * n_iter), _MM_HINT_T0);
-
-			__m512 x0, x1, x2, x3;
-
-			// Load data from memory
-			x0 = _mm512_load_ps(ptr + (0 * N_SIMD));
-			x1 = _mm512_load_ps(ptr + (1 * N_SIMD));
-			x2 = _mm512_load_ps(ptr + (2 * N_SIMD));
-			x3 = _mm512_load_ps(ptr + (3 * N_SIMD));
-
-			// Compute absolute values
-			x0 = _mm512_abs_ps(x0);
-			x1 = _mm512_abs_ps(x1);
-			x2 = _mm512_abs_ps(x2);
-			x3 = _mm512_abs_ps(x3);
-
-			// Compute the peaks
-			x0 = _mm512_max_ps(x0, x1);
-			x2 = _mm512_max_ps(x2, x3);
-			x0 = _mm512_max_ps(x0, x2);
-
-			zmax = _mm512_max_ps(zmax, x0);
+			zmax = _mm512_max_ps(zmax, max6);
 		}
 
 		start += unrolled_count * n_loop;
 	}
 
-	// Process remaining SIMD frames
+	// Process remaining SIMD frames 16 at a time
 	for (size_t i = start; i < simd_count; ++i)
 	{
 		size_t offset = N_SIMD * i;
@@ -215,25 +177,18 @@ x86_avx512f_compute_peak(const float* src, uint32_t nframes, float current)
 		zmax = _mm512_max_ps(zmax, x0);
 	}
 
-	// Get the max of the ZMM registers
-	current = _mm512_reduce_max_ps(zmax);
-
-	// Process remaining samples
+	// Process remaining samples, still using SIMD
 	if (nframes_rem > 0)
 	{
-		// sign bit mask for absolute value
-		const __m128 mask = _mm_set_ss(-0.0f);
-		__m128 zmax = _mm_set_ss(current);
-
-		for (size_t frame = nframes_simd; frame < nframes; ++frame)
-		{
-			__m128 x0 = _mm_load_ss(src_aligned + frame);
-			x0 = _mm_andnot_ps(mask, x0); // absolute value
-			zmax = _mm_max_ss(zmax, x0);
-		}
-
-		current = _mm_cvtss_f32(zmax);
+		// Create a mask for loading remaining samples
+		__mmask16 load_mask = (1 << nframes_rem) - 1;
+		__m512 x0 = _mm512_maskz_load_ps(load_mask, src_aligned + nframes_simd);
+		x0 = _mm512_abs_ps(x0);
+		zmax = _mm512_max_ps(zmax, x0);
 	}
+
+	// Get the max of the ZMM registers
+	current = _mm512_reduce_max_ps(zmax);
 
 #if defined(__GNUC__) && (__GNUC__ < 8)
 	// There's a penalty going from AVX mode to SSE mode. This can
@@ -257,33 +212,38 @@ x86_avx512f_find_peaks(const float* src, uint32_t nframes, float* minf, float* m
 {
 	// Compute the next aligned pointer
 	const float* src_aligned = (const float*) ALIGN_PTR_NEXT(src, N_ALIGNMENT);
+
+	// Broadcast to all elements in register
+	__m512 zmin = _mm512_set1_ps(*minf);
+	__m512 zmax = _mm512_set1_ps(*maxf);
+
 	float min_val = *minf;
 	float max_val = *maxf;
 
 	// Process misaligned samples before the first aligned address
 	if (UNLIKELY(src_aligned > src))
 	{
-		__m128 zminb = _mm_set_ss(min_val);
-		__m128 zmaxb = _mm_set_ss(max_val);
-
+		// Unaligned samples to process
 		size_t unaligned_count = src_aligned - src;
+
+		// Handle small number of nframes
 		size_t count = std::min<size_t>(unaligned_count, nframes);
 
-		for (size_t i = 0; i < count; i++)
+		// Mask load for initial unaligned samples
+		__mmask16 load_mask = (1 << count) - 1;
+		__m512 x0 = _mm512_maskz_loadu_ps(load_mask, src);
+		zmax = _mm512_max_ps(zmax, x0);
+		zmin = _mm512_min_ps(zmin, x0);
+		nframes -= (uint32_t)count;
+
+		if (nframes == 0)
 		{
-			__m128 x = _mm_load_ss(src + i);
-			zminb = _mm_min_ss(zminb, x);
-			zmaxb = _mm_max_ss(zmaxb, x);
+			// Get the max of the ZMM registers
+			*maxf = _mm512_reduce_max_ps(zmax);
+			*minf = _mm512_reduce_min_ps(zmin);
+			return;
 		}
-
-		nframes -= count;
-		min_val = _mm_cvtss_f32(zminb);
-		max_val = _mm_cvtss_f32(zmaxb);
 	}
-
-	// Broadcast to all elements in register
-	__m512 zmin = _mm512_set1_ps(min_val);
-	__m512 zmax = _mm512_set1_ps(max_val);
 
 	// Compute the number of SIMD frames
 	size_t simd_count = nframes / N_SIMD;
@@ -291,39 +251,51 @@ x86_avx512f_find_peaks(const float* src, uint32_t nframes, float* minf, float* m
 	size_t nframes_rem = nframes - nframes_simd;
 	size_t start = 0;
 
-	if (simd_count >= 4)
+	if (simd_count >= 8)
 	{
-		const size_t n_loop = 4;
+		const size_t n_loop = 8;
 		const size_t n_iter = n_loop * N_SIMD;
-		const size_t unrolled_count = (simd_count - start) / n_loop;
+		const size_t unrolled_count = simd_count / n_loop;
+
 		for (size_t i = start; i < unrolled_count; ++i)
 		{
-			// Compute the pointers
-			size_t offset = n_iter * i + (start * N_SIMD);
-			const float* ptr = src_aligned + offset;
+			// Compute the pointer
+			const float* ptr = src_aligned + n_iter * i;;
 
 			// Prefetch distance in number of floats
 			_mm_prefetch((const char*) (ptr + n_loop * n_iter), _MM_HINT_T0);
 
-			__m512 x0, x1, x2, x3;
-			__m512 zmin0, zmin1, zmin2;
-			__m512 zmax0, zmax1, zmax2;
+			__m512 x0, x1, x2, x3, x4, x5, x6, x7;
+			__m512 zmin0, zmin1, zmin2, zmin3;
+			__m512 zmax0, zmax1, zmax2, zmax3;
 
 			// Load data from memory
 			x0 = _mm512_load_ps(ptr + (0 * N_SIMD));
 			x1 = _mm512_load_ps(ptr + (1 * N_SIMD));
 			x2 = _mm512_load_ps(ptr + (2 * N_SIMD));
 			x3 = _mm512_load_ps(ptr + (3 * N_SIMD));
+			x4 = _mm512_load_ps(ptr + (4 * N_SIMD));
+			x5 = _mm512_load_ps(ptr + (5 * N_SIMD));
+			x6 = _mm512_load_ps(ptr + (6 * N_SIMD));
+			x7 = _mm512_load_ps(ptr + (7 * N_SIMD));
 
 			// Compute the minima
 			zmin0 = _mm512_min_ps(x0, x1);
 			zmin1 = _mm512_min_ps(x2, x3);
+			zmin2 = _mm512_min_ps(x4, x5);
+			zmin3 = _mm512_min_ps(x6, x7);
+			zmin0 = _mm512_min_ps(zmin0, zmin1);
+			zmin1 = _mm512_min_ps(zmin2, zmin3);
 			zmin2 = _mm512_min_ps(zmin0, zmin1);
 			zmin = _mm512_min_ps(zmin, zmin2);
 
 			// Compute the maxima
 			zmax0 = _mm512_max_ps(x0, x1);
 			zmax1 = _mm512_max_ps(x2, x3);
+			zmax2 = _mm512_max_ps(x4, x5);
+			zmax3 = _mm512_max_ps(x6, x7);
+			zmax0 = _mm512_max_ps(zmax0, zmax1);
+			zmax1 = _mm512_max_ps(zmax2, zmax3);
 			zmax2 = _mm512_max_ps(zmax0, zmax1);
 			zmax = _mm512_max_ps(zmax, zmax2);
 		}
@@ -347,22 +319,15 @@ x86_avx512f_find_peaks(const float* src, uint32_t nframes, float* minf, float* m
 	// Process remaining samples
 	if (nframes_rem > 0)
 	{
-		__m128 zminb = _mm_set_ss(min_val);
-		__m128 zmaxb = _mm_set_ss(max_val);
-
-		for (size_t frame = nframes_simd; frame < nframes; ++frame)
-		{
-			__m128 x = _mm_load_ss(src_aligned + frame);
-			zminb = _mm_min_ss(zminb, x);
-			zmaxb = _mm_max_ss(zmaxb, x);
-		}
-
-		min_val = _mm_cvtss_f32(zminb);
-		max_val = _mm_cvtss_f32(zmaxb);
+		// Create a mask for loading remaining samples
+		__mmask16 load_mask = (1 << nframes_rem) - 1;
+		__m512 x0 = _mm512_maskz_load_ps(load_mask, src_aligned + nframes_simd);
+		zmax = _mm512_max_ps(zmax, x0);
+		zmin = _mm512_min_ps(zmin, x0);
 	}
 
-	*minf = min_val;
-	*maxf = max_val;
+	*minf = _mm512_reduce_min_ps(zmin);
+	*maxf = _mm512_reduce_max_ps(zmax);
 
 #if defined(__GNUC__) && (__GNUC__ < 8)
 	// There's a penalty going from AVX mode to SSE mode. This can
@@ -371,6 +336,7 @@ x86_avx512f_find_peaks(const float* src, uint32_t nframes, float* minf, float* m
 
 	_mm256_zeroupper(); // zeros the upper portion of YMM register
 #endif
+	return;
 }
 
 /**
@@ -382,137 +348,113 @@ x86_avx512f_find_peaks(const float* src, uint32_t nframes, float* minf, float* m
 C_FUNC void
 x86_avx512f_apply_gain_to_buffer(float* dst, uint32_t nframes, float gain)
 {
-	// Convert to signed integer to prevent any arithmetic overflow errors
-	int32_t frames = static_cast<int32_t>(nframes);
+	// Compute the next aligned pointer
+	float* dst_aligned = (float*) ALIGN_PTR_NEXT(dst, N_ALIGNMENT);
 
-	// Load gain vector to all elements of XMM, YMM, and ZMM register
-	// It's the same register, but used for SSE, AVX, and AVX512 calculation
+	// Broadcast gain to all elements in ZMM register
 	__m512 zgain = _mm512_set1_ps(gain);
-	__m256 ygain = _mm512_castps512_ps256(zgain);
-	__m128 xgain = _mm512_castps512_ps128(zgain);
 
-	while (frames > 0)
+	// Process misaligned samples before the first aligned address
+	if (UNLIKELY(dst_aligned > dst))
 	{
-		if (IS_ALIGNED_TO(dst, sizeof(__m512)))
-		{
-			break;
-		}
+		// Unaligned samples to process
+		size_t unaligned_count = dst_aligned - dst;
 
-		if (frames >= 8 && IS_ALIGNED_TO(dst, sizeof(__m256)))
-		{
-			__m256 x = _mm256_load_ps(dst);
-			__m256 y = _mm256_mul_ps(ygain, x);
-			_mm256_store_ps(dst, y);
-			dst += 8;
-			frames -= 8;
-			continue;
-		}
+		// Handle small number of nframes
+		size_t count = std::min<size_t>(unaligned_count, nframes);
 
-		if (frames >= 4 && IS_ALIGNED_TO(dst, sizeof(__m128)))
-		{
-			__m128 x = _mm_load_ps(dst);
-			__m128 y = _mm_mul_ps(xgain, x);
-			_mm_store_ps(dst, y);
-			dst += 4;
-			frames -= 4;
-			continue;
-		}
-
-		// Pointers are aligned to float boundaries (4 bytes)
-		__m128 x = _mm_load_ss(dst);
-		__m128 y = _mm_mul_ss(xgain, x);
-		_mm_store_ss(dst, y);
-		++dst;
-		--frames;
-	}
-
-	// Process the remaining samples 128 at a time
-	while (frames >= 128)
-	{
-#if defined(COMPILER_MSVC) || defined(COMPILER_MINGW)
-		_mm_prefetch(reinterpret_cast<void const*>(dst + 128), _mm_hint(0));
-#else
-		__builtin_prefetch(reinterpret_cast<void const*>(dst + 128), 0, 0);
-#endif
-		__m512 x0 = _mm512_load_ps(dst + 0);
-		__m512 x1 = _mm512_load_ps(dst + 16);
-		__m512 x2 = _mm512_load_ps(dst + 32);
-		__m512 x3 = _mm512_load_ps(dst + 48);
-		__m512 x4 = _mm512_load_ps(dst + 64);
-		__m512 x5 = _mm512_load_ps(dst + 80);
-		__m512 x6 = _mm512_load_ps(dst + 96);
-		__m512 x7 = _mm512_load_ps(dst + 112);
-
-		__m512 y0 = _mm512_mul_ps(zgain, x0);
-		__m512 y1 = _mm512_mul_ps(zgain, x1);
-		__m512 y2 = _mm512_mul_ps(zgain, x2);
-		__m512 y3 = _mm512_mul_ps(zgain, x3);
-		__m512 y4 = _mm512_mul_ps(zgain, x4);
-		__m512 y5 = _mm512_mul_ps(zgain, x5);
-		__m512 y6 = _mm512_mul_ps(zgain, x6);
-		__m512 y7 = _mm512_mul_ps(zgain, x7);
-
-		_mm512_store_ps(dst + 0, y0);
-		_mm512_store_ps(dst + 16, y1);
-		_mm512_store_ps(dst + 32, y2);
-		_mm512_store_ps(dst + 48, y3);
-		_mm512_store_ps(dst + 64, y4);
-		_mm512_store_ps(dst + 80, y5);
-		_mm512_store_ps(dst + 96, y6);
-		_mm512_store_ps(dst + 112, y7);
-
-		dst += 128;
-		frames -= 128;
-	}
-
-	// Process the remaining samples 16 at a time
-	while (frames >= 16)
-	{
-		__m512 x = _mm512_load_ps(dst);
+		// Load first few elements with mask
+		__mmask16 load_mask = (1 << count) - 1;
+		__m512 x = _mm512_maskz_loadu_ps(load_mask, dst);
 		__m512 y = _mm512_mul_ps(zgain, x);
-		_mm512_store_ps(dst, y);
 
-		dst += 16;
-		frames -= 16;
+		// Store the elements back into memory
+		_mm512_mask_store_ps(dst, load_mask, y);
+
+		nframes -= count;
 	}
 
-	// Process remaining samples x8
-	while (frames >= 8)
-	{
-		__m256 x = _mm256_load_ps(dst);
-		__m256 y = _mm256_mul_ps(ygain, x);
-		_mm256_store_ps(dst, y);
+	// Compute the number of SIMD frames
+	size_t simd_count = nframes / N_SIMD;
+	size_t nframes_simd = N_SIMD * simd_count;
+	size_t nframes_rem = nframes - nframes_simd;
+	size_t start = 0;
 
-		dst += 8;
-		frames -= 8;
+	if (simd_count >= 8)
+	{
+		const size_t n_loop = 8;
+		const size_t n_iter = n_loop * N_SIMD;
+		const size_t unrolled_count = simd_count / n_loop;
+
+		for (size_t i = 0; i < unrolled_count; ++i)
+		{
+			float* ptr = dst_aligned + (i * n_iter);
+
+			__m512 x0, x1, x2, x3, x4, x5, x6, x7;
+			__m512 y0, y1, y2, y3, y4, y5, y6, y7;
+
+			// Load data from memory
+			x0 = _mm512_load_ps(ptr + (0 * N_SIMD));
+			x1 = _mm512_load_ps(ptr + (1 * N_SIMD));
+			x2 = _mm512_load_ps(ptr + (2 * N_SIMD));
+			x3 = _mm512_load_ps(ptr + (3 * N_SIMD));
+			x4 = _mm512_load_ps(ptr + (4 * N_SIMD));
+			x5 = _mm512_load_ps(ptr + (5 * N_SIMD));
+			x6 = _mm512_load_ps(ptr + (6 * N_SIMD));
+			x7 = _mm512_load_ps(ptr + (7 * N_SIMD));
+
+			// Multiply by gain
+			y0 = _mm512_mul_ps(zgain, x0);
+			y1 = _mm512_mul_ps(zgain, x1);
+			y2 = _mm512_mul_ps(zgain, x2);
+			y3 = _mm512_mul_ps(zgain, x3);
+			y4 = _mm512_mul_ps(zgain, x4);
+			y5 = _mm512_mul_ps(zgain, x5);
+			y6 = _mm512_mul_ps(zgain, x6);
+			y7 = _mm512_mul_ps(zgain, x7);
+
+			// Store results back to memory
+			_mm512_store_ps(ptr + (0 * N_SIMD), y0);
+			_mm512_store_ps(ptr + (1 * N_SIMD), y1);
+			_mm512_store_ps(ptr + (2 * N_SIMD), y2);
+			_mm512_store_ps(ptr + (3 * N_SIMD), y3);
+			_mm512_store_ps(ptr + (4 * N_SIMD), y4);
+			_mm512_store_ps(ptr + (5 * N_SIMD), y5);
+			_mm512_store_ps(ptr + (6 * N_SIMD), y6);
+			_mm512_store_ps(ptr + (7 * N_SIMD), y7);
+		}
+
+		start += unrolled_count * n_loop;
 	}
 
-	// Process remaining samples x4
-	while (frames >= 4)
+	// Process remaining SIMD frames 16 at a time
+	for (size_t i = start; i < simd_count; ++i)
 	{
-		__m128 x = _mm_load_ps(dst);
-		__m128 y = _mm_mul_ps(xgain, x);
-		_mm_store_ps(dst, y);
-
-		dst += 4;
-		frames -= 4;
+		size_t offset = N_SIMD * i;
+		__m512 x, y;
+		x = _mm512_load_ps(dst_aligned + offset);
+		y = _mm512_mul_ps(zgain, x);
+		_mm512_store_ps(dst_aligned + offset, y);
 	}
 
 	// Process remaining samples
-	while (frames > 0)
+	if (nframes_rem > 0)
 	{
-		__m128 x = _mm_load_ss(dst);
-		__m128 y = _mm_mul_ss(xgain, x);
-		_mm_store_ss(dst, y);
-		++dst;
-		--frames;
+		// Create a mask for loading remaining samples
+		__mmask16 load_mask = (1 << nframes_rem) - 1;
+		__m512 x = _mm512_maskz_load_ps(load_mask, dst_aligned + nframes_simd);
+		__m512 y = _mm512_mul_ps(zgain, x);
+		_mm512_mask_store_ps(dst_aligned + nframes_simd, load_mask, y);
 	}
 
+#if defined(__GNUC__) && (__GNUC__ < 8)
 	// There's a penalty going from AVX mode to SSE mode. This can
 	// be avoided by ensuring the CPU that rest of the routine is no
 	// longer interested in the upper portion of the YMM register.
-	//
+
 	_mm256_zeroupper(); // zeros the upper portion of YMM register
+#endif
+	return;
 }
 
 /**
