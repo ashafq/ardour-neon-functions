@@ -249,8 +249,10 @@ main(int argc, char** argv)
 
 		MICRO_BENCH({ (void) opt_compute_peak(src, nframes, 0.0F); }, ITER);
 
-		src[5] = 5.0F;
-		src[6] = -5.0F;
+		size_t i = rand() % nframes;
+		size_t j = rand() % nframes;
+		src[i] = 5.0F;
+		src[j] = -5.0F;
 		float peak_d = default_compute_peak(src, nframes, 0.0F);
 		float peak_a = opt_compute_peak(src, nframes, 0.0F);
 
