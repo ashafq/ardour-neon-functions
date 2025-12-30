@@ -228,7 +228,7 @@ main(int argc, char** argv)
 	// Run some dummy calculation to warm up caches
 	{
 		float gain = frandf();
-		for (volatile long j = 0; j < 5; ++j)
+		for (long j = 0; j < 5; ++j)
 		{
 			for (long i = 0; i < ITER; ++i)
 			{

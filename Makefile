@@ -21,7 +21,7 @@ else ifneq ($(shell uname -a | grep -ic "linux.*x86_64"), 0)
     CXX := /usr/bin/g++
     CFLAGS += -fopenmp
     ifneq ($(shell lscpu | grep -ic "avx512"), 0)
-        CFLAGS += -mavx512f -mfma -DFPU_AVX512F_SUPPORT=1
+        CFLAGS += -mavx512f -mfma -mavx512dq -DFPU_AVX512F_SUPPORT=1
     else
         $(error "Unsupported extension on x86_64")
     endif
