@@ -178,7 +178,7 @@ def main():
     ap.add_argument("--exclude", nargs="*", help="Exclude these function names")
     ap.add_argument("--ymin", type=float, default=None)
     ap.add_argument("--ymax", type=float, default=None)
-    ap.add_argument("--annotate", action="store_true", help="Label bars with rounded %")
+    #ap.add_argument("--annotate", action="store_true", help="Label bars with rounded %")
     args = ap.parse_args()
 
     if args.input == "-":
@@ -200,7 +200,7 @@ def main():
     )
 
     outpath = Path(args.out) if args.out else None
-    plot(frames, ys, args.title, outpath, args.show, args.ymin, args.ymax, args.annotate)
+    plot(frames, ys, args.title, outpath, args.show, args.ymin, args.ymax, False)
 
 
 if __name__ == "__main__":
