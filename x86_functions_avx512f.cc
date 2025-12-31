@@ -67,11 +67,7 @@
  *
  * Ensures stable symbol names when compiled as C++.
  */
-#ifdef __cplusplus
-#define C_FUNC extern "C"
-#else
 #define C_FUNC
-#endif
 
 /**
  * @def N_ALIGNMENT
@@ -113,24 +109,11 @@ x86_avx512f_compute_peak(const float* src, uint32_t nframes, float current)
 	const float* src_aligned = (const float*) ALIGN_PTR_NEXT(src, N_ALIGNMENT);
 
 	// Broadcast the current max values to all elements of the ZMM register
-	static const __m512 mask = _mm512_set1_ps(-0.0F);
 	__m512 zmax = _mm512_set1_ps(current);
 
-	// Process misaligned samples before the first aligned address
-	if (UNLIKELY(src_aligned > src))
-	{
-		// Unaligned samples to process
-		size_t unaligned_count = src_aligned - src;
-
-		// Handle small number of nframes
-		size_t count = std::min<size_t>(unaligned_count, nframes);
-
-		__mmask16 load_mask = (1 << count) - 1;
-		__m512 x0 = _mm512_maskz_loadu_ps(load_mask, src);
-		x0 = _mm512_andnot_ps(mask, x0);
-		zmax = _mm512_max_ps(zmax, x0);
-		nframes -= (uint32_t) count;
-	}
+	// Unaligned samples to process, handle small number of nframes
+	size_t unaligned_count = std::min<size_t>(src_aligned - src, nframes);
+	nframes -= (uint32_t) unaligned_count;
 
 	// Compute the number of SIMD frames
 	size_t simd_count = nframes / N_SIMD;
@@ -138,10 +121,22 @@ x86_avx512f_compute_peak(const float* src, uint32_t nframes, float current)
 	size_t nframes_rem = nframes - nframes_simd;
 	size_t start = 0;
 
+	// Process misaligned samples before the first aligned address
+	if (UNLIKELY(src_aligned > src))
+	{
+		__mmask16 load_mask = (1 << unaligned_count) - 1;
+		__m512 x0 = _mm512_maskz_loadu_ps(load_mask, src);
+		x0 = _mm512_abs_ps(x0);
+		zmax = _mm512_max_ps(zmax, x0);
+
+		if (!nframes)
+			goto reduce_max_ret;
+	}
+
 	if (simd_count >= 4)
 	{
-		const size_t n_loop = 4;
-		const size_t n_iter = n_loop * N_SIMD;
+		constexpr size_t n_loop = 4;
+		constexpr size_t n_iter = n_loop * N_SIMD;
 		const size_t unrolled_count = simd_count / n_loop;
 
 		for (size_t i = 0; i < unrolled_count; ++i)
@@ -151,7 +146,7 @@ x86_avx512f_compute_peak(const float* src, uint32_t nframes, float current)
 			const float* ptr = src_aligned + offset;
 
 			// Prefetch the next further data
-			_mm_prefetch((const char*) (ptr + 3 * n_iter), _MM_HINT_T0);
+			_mm_prefetch((const char*) (ptr + 4 * n_iter), _MM_HINT_T0);
 
 			__m512 x0, x1, x2, x3;
 			__m512 max0, max1, max2;
@@ -163,10 +158,10 @@ x86_avx512f_compute_peak(const float* src, uint32_t nframes, float current)
 			x3 = _mm512_load_ps(ptr + (3 * N_SIMD));
 
 			// Compute absolute values
-			x0 = _mm512_andnot_ps(mask, x0);
-			x1 = _mm512_andnot_ps(mask, x1);
-			x2 = _mm512_andnot_ps(mask, x2);
-			x3 = _mm512_andnot_ps(mask, x3);
+			x0 = _mm512_abs_ps(x0);
+			x1 = _mm512_abs_ps(x1);
+			x2 = _mm512_abs_ps(x2);
+			x3 = _mm512_abs_ps(x3);
 
 			// Compute the peaks
 			max0 = _mm512_max_ps(x0, x1);
@@ -186,7 +181,7 @@ x86_avx512f_compute_peak(const float* src, uint32_t nframes, float current)
 		__m512 x0;
 
 		x0 = _mm512_load_ps(src_aligned + offset);
-		x0 = _mm512_andnot_ps(mask, x0);
+		x0 = _mm512_abs_ps(x0);
 		zmax = _mm512_max_ps(zmax, x0);
 	}
 
@@ -196,10 +191,11 @@ x86_avx512f_compute_peak(const float* src, uint32_t nframes, float current)
 		// Create a mask for loading remaining samples
 		__mmask16 load_mask = (1 << nframes_rem) - 1;
 		__m512 x0 = _mm512_maskz_load_ps(load_mask, src_aligned + nframes_simd);
-		x0 = _mm512_andnot_ps(mask, x0);
+		x0 = _mm512_abs_ps(x0);
 		zmax = _mm512_max_ps(zmax, x0);
 	}
 
+reduce_max_ret:
 	// Get the max of the ZMM registers
 	current = _mm512_reduce_max_ps(zmax);
 
@@ -272,7 +268,6 @@ x86_avx512f_find_peaks(const float* src, uint32_t nframes, float* minf, float* m
 		{
 			// Compute the pointer
 			const float* ptr = src_aligned + n_iter * i;
-			;
 
 			// Prefetch distance in number of floats
 			_mm_prefetch((const char*) (ptr + 4 * n_iter), _MM_HINT_T0);

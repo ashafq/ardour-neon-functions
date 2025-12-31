@@ -72,21 +72,18 @@ extern "C"
 	arm_neon_mix_buffers_with_gain(float* dst, float const* src, uint32_t nframes, float gain);
 }
 
-extern "C"
-{
-	LIBARDOUR_API float
-	x86_avx512f_compute_peak(float const* buf, uint32_t nsamples, float current);
-	LIBARDOUR_API void
-	x86_avx512f_apply_gain_to_buffer(float* buf, uint32_t nframes, float gain);
-	LIBARDOUR_API void
-	x86_avx512f_mix_buffers_with_gain(float* dst, float const* src, uint32_t nframes, float gain);
-	LIBARDOUR_API void
-	x86_avx512f_mix_buffers_no_gain(float* dst, float const* src, uint32_t nframes);
-	LIBARDOUR_API void
-	x86_avx512f_copy_vector(float* dst, float const* src, uint32_t nframes);
-	LIBARDOUR_API void
-	x86_avx512f_find_peaks(float const* buf, uint32_t nsamples, float* min, float* max);
-}
+LIBARDOUR_API float
+x86_avx512f_compute_peak(float const* buf, uint32_t nsamples, float current);
+LIBARDOUR_API void
+x86_avx512f_apply_gain_to_buffer(float* buf, uint32_t nframes, float gain);
+LIBARDOUR_API void
+x86_avx512f_mix_buffers_with_gain(float* dst, float const* src, uint32_t nframes, float gain);
+LIBARDOUR_API void
+x86_avx512f_mix_buffers_no_gain(float* dst, float const* src, uint32_t nframes);
+LIBARDOUR_API void
+x86_avx512f_copy_vector(float* dst, float const* src, uint32_t nframes);
+LIBARDOUR_API void
+x86_avx512f_find_peaks(float const* buf, uint32_t nsamples, float* min, float* max);
 
 // The optimized backend chosen at runtime.
 static float (*opt_compute_peak)(const float* src, uint32_t nframes, float current);
@@ -188,7 +185,7 @@ main(int argc, char** argv)
 
 	uint32_t nframes = atoi(argv[1]);
 	size_t alignment = atoi(argv[2]);
-	constexpr auto ALIGNMENT = size_t(128);
+	constexpr auto ALIGNMENT = size_t(1024);
 
 	if (!nframes || alignment <= 0 || alignment >= ALIGNMENT)
 	{

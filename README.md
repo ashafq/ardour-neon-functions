@@ -19,3 +19,7 @@ against default (unoptimized) implementations.
 ![Rasperry Pi Pico](data/pi2-armv7l.png)
 
 *8192 frame size did not complete in time
+
+## Results from AMD Ryzen AI Max (AVX512)
+
+![Ryzen AI Max](data/avx512.png)
