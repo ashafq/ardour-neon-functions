@@ -117,6 +117,7 @@ x86_avx512f_compute_peak(const float* src, uint32_t nframes, float current)
 	{
 		uint32_t i = 0;
 
+		# if 0
 		while (nframes >= 32)
 		{
 			__m512 x0 = _mm512_loadu_ps(src + i + 0);
@@ -132,6 +133,7 @@ x86_avx512f_compute_peak(const float* src, uint32_t nframes, float current)
 			i += 32;
 			nframes -= 32;
 		}
+		#endif
 
 		while (nframes >= 16)
 		{
@@ -176,9 +178,9 @@ x86_avx512f_compute_peak(const float* src, uint32_t nframes, float current)
 		zmax = _mm512_max_ps(zmax, x0);
 	}
 
-	if (simd_count >= 4)
+	if (simd_count >= 8)
 	{
-		constexpr size_t n_loop = 4;
+		constexpr size_t n_loop = 8;
 		constexpr size_t n_iter = n_loop * N_SIMD;
 		const size_t unrolled_count = simd_count / n_loop;
 
@@ -191,27 +193,38 @@ x86_avx512f_compute_peak(const float* src, uint32_t nframes, float current)
 			// Prefetch the next further data
 			_mm_prefetch((const char*) (ptr + 4 * n_iter), _MM_HINT_T0);
 
-			__m512 x0, x1, x2, x3;
-			__m512 max0, max1, max2;
+			__m512 x0, x1, x2, x3, x4, x5, x6, x7;
+			__m512 zmax0, zmax1, zmax2, zmax3;
 
 			// Load data from memory
 			x0 = _mm512_load_ps(ptr + (0 * N_SIMD));
 			x1 = _mm512_load_ps(ptr + (1 * N_SIMD));
 			x2 = _mm512_load_ps(ptr + (2 * N_SIMD));
 			x3 = _mm512_load_ps(ptr + (3 * N_SIMD));
+			x4 = _mm512_load_ps(ptr + (4 * N_SIMD));
+			x5 = _mm512_load_ps(ptr + (5 * N_SIMD));
+			x6 = _mm512_load_ps(ptr + (6 * N_SIMD));
+			x7 = _mm512_load_ps(ptr + (7 * N_SIMD));
 
 			// Compute absolute values
 			x0 = _mm512_abs_ps(x0);
 			x1 = _mm512_abs_ps(x1);
 			x2 = _mm512_abs_ps(x2);
 			x3 = _mm512_abs_ps(x3);
+			x4 = _mm512_abs_ps(x4);
+			x5 = _mm512_abs_ps(x5);
+			x6 = _mm512_abs_ps(x6);
+			x7 = _mm512_abs_ps(x7);
 
 			// Compute the peaks
-			max0 = _mm512_max_ps(x0, x1);
-			max1 = _mm512_max_ps(x2, x3);
-			max2 = _mm512_max_ps(max0, max1);
-
-			zmax = _mm512_max_ps(zmax, max2);
+			zmax0 = _mm512_max_ps(x0, x1);
+			zmax1 = _mm512_max_ps(x2, x3);
+			zmax2 = _mm512_max_ps(x4, x5);
+			zmax3 = _mm512_max_ps(x6, x7);
+			zmax0 = _mm512_max_ps(zmax0, zmax1);
+			zmax1 = _mm512_max_ps(zmax2, zmax3);
+			zmax2 = _mm512_max_ps(zmax0, zmax1);
+			zmax = _mm512_max_ps(zmax, zmax2);
 		}
 
 		start += unrolled_count * n_loop;
