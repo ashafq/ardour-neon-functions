@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2023 Ayan Shafqat <ayan.x.shafqat@gmail.com>
+ * Copyright (C) 2026 Ayan Shafqat <ayan.x.shafqat@gmail.com>
  * Copyright (C) 2024 Robin Gareus <robin@gareus.org>
  *
  * This program is free software; you can redistribute it and/or modify
@@ -67,7 +67,11 @@
  *
  * Ensures stable symbol names when compiled as C++.
  */
+#ifdef __cplusplus
+#define C_FUNC extern "C"
+#else
 #define C_FUNC
+#endif
 
 /**
  * @def N_ALIGNMENT
@@ -105,11 +109,53 @@
 C_FUNC float
 x86_avx512f_compute_peak(const float* src, uint32_t nframes, float current)
 {
-	// Compute the next aligned pointer
-	const float* src_aligned = (const float*) ALIGN_PTR_NEXT(src, N_ALIGNMENT);
-
 	// Broadcast the current max values to all elements of the ZMM register
 	__m512 zmax = _mm512_set1_ps(current);
+
+	// For small buffer size, just process unaligned samples
+	if (nframes <= 256)
+	{
+		uint32_t i = 0;
+
+		while (nframes >= 32)
+		{
+			__m512 x0 = _mm512_loadu_ps(src + i + 0);
+			__m512 x1 = _mm512_loadu_ps(src + i + 16);
+
+			x0 = _mm512_abs_ps(x0);
+			x1 = _mm512_abs_ps(x1);
+
+			__m512 max = _mm512_max_ps(x0, x1);
+
+			zmax = _mm512_max_ps(zmax, max);
+
+			i += 32;
+			nframes -= 32;
+		}
+
+		while (nframes >= 16)
+		{
+			__m512 x = _mm512_loadu_ps(src + i);
+			x = _mm512_abs_ps(x);
+			zmax = _mm512_max_ps(zmax, x);
+
+			i += 16;
+			nframes -= 16;
+		}
+
+		if (nframes)
+		{
+			__mmask16 m = (__mmask16) ((1u << nframes) - 1u);
+			__m512 x = _mm512_maskz_loadu_ps(m, src + i);
+			x = _mm512_abs_ps(x);
+			zmax = _mm512_max_ps(zmax, x);
+		}
+
+		return _mm512_reduce_max_ps(zmax);
+	}
+
+	// Compute the next aligned pointer
+	const float* src_aligned = (const float*) ALIGN_PTR_NEXT(src, N_ALIGNMENT);
 
 	// Unaligned samples to process, handle small number of nframes
 	size_t unaligned_count = std::min<size_t>(src_aligned - src, nframes);
@@ -128,9 +174,6 @@ x86_avx512f_compute_peak(const float* src, uint32_t nframes, float current)
 		__m512 x0 = _mm512_maskz_loadu_ps(load_mask, src);
 		x0 = _mm512_abs_ps(x0);
 		zmax = _mm512_max_ps(zmax, x0);
-
-		if (!nframes)
-			goto reduce_max_ret;
 	}
 
 	if (simd_count >= 4)
@@ -186,7 +229,7 @@ x86_avx512f_compute_peak(const float* src, uint32_t nframes, float current)
 	}
 
 	// Process remaining samples, still using SIMD
-	if (nframes_rem > 0)
+	if (UNLIKELY(nframes_rem > 0))
 	{
 		// Create a mask for loading remaining samples
 		__mmask16 load_mask = (1 << nframes_rem) - 1;
@@ -195,7 +238,6 @@ x86_avx512f_compute_peak(const float* src, uint32_t nframes, float current)
 		zmax = _mm512_max_ps(zmax, x0);
 	}
 
-reduce_max_ret:
 	// Get the max of the ZMM registers
 	current = _mm512_reduce_max_ps(zmax);
 
