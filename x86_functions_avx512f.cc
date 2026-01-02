@@ -117,24 +117,6 @@ x86_avx512f_compute_peak(const float* src, uint32_t nframes, float current)
 	{
 		uint32_t i = 0;
 
-		# if 0
-		while (nframes >= 32)
-		{
-			__m512 x0 = _mm512_loadu_ps(src + i + 0);
-			__m512 x1 = _mm512_loadu_ps(src + i + 16);
-
-			x0 = _mm512_abs_ps(x0);
-			x1 = _mm512_abs_ps(x1);
-
-			__m512 max = _mm512_max_ps(x0, x1);
-
-			zmax = _mm512_max_ps(zmax, max);
-
-			i += 32;
-			nframes -= 32;
-		}
-		#endif
-
 		while (nframes >= 16)
 		{
 			__m512 x = _mm512_loadu_ps(src + i);
@@ -283,21 +265,50 @@ x86_avx512f_compute_peak(const float* src, uint32_t nframes, float current)
 C_FUNC void
 x86_avx512f_find_peaks(const float* src, uint32_t nframes, float* minf, float* maxf)
 {
-	// Compute the next aligned pointer
-	const float* src_aligned = (const float*) ALIGN_PTR_NEXT(src, N_ALIGNMENT);
-
 	// Broadcast to all elements in register
 	__m512 zmin = _mm512_set1_ps(*minf);
 	__m512 zmax = _mm512_set1_ps(*maxf);
+
+	uint32_t simd_count, nframes_simd, nframes_rem, start;
+	const float *src_aligned;
+
+	// For small buffer size, just process unaligned samples
+	if (nframes <= 64)
+	{
+		uint32_t i = 0;
+
+		while (nframes >= 16)
+		{
+			__m512 x = _mm512_loadu_ps(src + i);
+			zmax = _mm512_max_ps(zmax, x);
+			zmin = _mm512_min_ps(zmin, x);
+
+			i += 16;
+			nframes -= 16;
+		}
+
+		if (nframes)
+		{
+			__mmask16 m = (__mmask16) ((1u << nframes) - 1u);
+			__m512 x = _mm512_maskz_loadu_ps(m, src + i);
+			zmax = _mm512_max_ps(zmax, x);
+			zmin = _mm512_min_ps(zmin, x);
+		}
+
+		goto reduce_max_and_return;
+	}
+
+	// Compute the next aligned pointer
+	src_aligned = (const float*) ALIGN_PTR_NEXT(src, N_ALIGNMENT);
 
 	// Process misaligned samples before the first aligned address
 	if (UNLIKELY(src_aligned > src))
 	{
 		// Unaligned samples to process
-		size_t unaligned_count = src_aligned - src;
+		uint32_t unaligned_count = src_aligned - src;
 
 		// Handle small number of nframes
-		size_t count = std::min<size_t>(unaligned_count, nframes);
+		uint32_t count = std::min<uint32_t>(unaligned_count, nframes);
 
 		// Mask load for initial unaligned samples
 		__mmask16 load_mask = (1 << count) - 1;
@@ -308,18 +319,18 @@ x86_avx512f_find_peaks(const float* src, uint32_t nframes, float* minf, float* m
 	}
 
 	// Compute the number of SIMD frames
-	size_t simd_count = nframes / N_SIMD;
-	size_t nframes_simd = N_SIMD * simd_count;
-	size_t nframes_rem = nframes - nframes_simd;
-	size_t start = 0;
+	simd_count = nframes / N_SIMD;
+	nframes_simd = N_SIMD * simd_count;
+	nframes_rem = nframes - nframes_simd;
+	start = 0;
 
 	if (simd_count >= 8)
 	{
-		const size_t n_loop = 8;
-		const size_t n_iter = n_loop * N_SIMD;
-		const size_t unrolled_count = simd_count / n_loop;
+		constexpr uint32_t n_loop = 8;
+		constexpr uint32_t n_iter = n_loop * N_SIMD;
+		const uint32_t unrolled_count = simd_count / n_loop;
 
-		for (size_t i = start; i < unrolled_count; ++i)
+		for (uint32_t i = start; i < unrolled_count; ++i)
 		{
 			// Compute the pointer
 			const float* ptr = src_aligned + n_iter * i;
@@ -366,9 +377,9 @@ x86_avx512f_find_peaks(const float* src, uint32_t nframes, float* minf, float* m
 	}
 
 	// Process remaining SIMD frames
-	for (size_t i = start; i < simd_count; ++i)
+	for (uint32_t i = start; i < simd_count; ++i)
 	{
-		size_t offset = N_SIMD * i;
+		uint32_t offset = N_SIMD * i;
 		__m512 x = _mm512_load_ps(src_aligned + offset);
 		zmax = _mm512_max_ps(zmax, x);
 		zmin = _mm512_min_ps(zmin, x);
@@ -383,6 +394,8 @@ x86_avx512f_find_peaks(const float* src, uint32_t nframes, float* minf, float* m
 		zmax = _mm512_max_ps(zmax, x0);
 		zmin = _mm512_min_ps(zmin, x0);
 	}
+
+reduce_max_and_return:
 
 	*minf = _mm512_reduce_min_ps(zmin);
 	*maxf = _mm512_reduce_max_ps(zmax);
