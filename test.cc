@@ -54,7 +54,9 @@ init_optimized_functions()
 	opt_mix_buffers_no_gain = &arm_neon_mix_buffers_no_gain;
 	opt_copy_vector = &arm_neon_copy_vector;
 	opt_find_peaks = &arm_neon_find_peaks;
-#elif defined(__x86_64__) && defined(__AVX512F__)
+#elif defined(__x86_64__)
+	// Hard coded to avx512...
+	// TODO: Fix this part
 	opt_compute_peak = &x86_avx512f_compute_peak;
 	opt_apply_gain_to_buffer = &x86_avx512f_apply_gain_to_buffer;
 	opt_mix_buffers_with_gain = &x86_avx512f_mix_buffers_with_gain;

@@ -46,7 +46,61 @@
  *
  * @return Aligned pointer.
  */
+#if defined(__GNUC__) || defined(__clang__)
+#define ALIGN_PTR_NEXT(ptr, align)                                                                                     \
+	__builtin_assume_aligned(((void*) ((((uintptr_t) (ptr)) + ((align) - 1)) & ~((uintptr_t) ((align) - 1)))),     \
+	                         align)
+#else
 #define ALIGN_PTR_NEXT(ptr, align) ((void*) ((((uintptr_t) (ptr)) + ((align) - 1)) & ~((uintptr_t) ((align) - 1))))
+#endif
+
+/**
+ *
+ * Check if zeroupper is needed
+ *
+ */
+#if defined(__clang__)
+// Clang exposes its own version macros.
+// Strictly assume Clang 6+ handles this automatically.
+#if (__clang_major__ < 6)
+#define NEED_AVX_ZEROUPPER 1
+#endif
+
+#elif defined(__GNUC__)
+// GCC 8+ handles this automatically (-mvzeroupper is default).
+#if (__GNUC__ < 8)
+#define NEED_AVX_ZEROUPPER 1
+#endif
+
+#endif
+
+/**
+ * @def AVX_ZEROUPPER
+ * @brief Helper macro to avoid AVX-SSE transition penalties on legacy compilers.
+ *
+ * Modern Intel CPUs (Sandy Bridge through Skylake) have a "dirty upper state"
+ * penalty. If AVX instruction is executed (using 256-bit YMM registers)
+ * and then immediately execute a legacy SSE instruction (using 128-bit XMM),
+ * the CPU triggers a microcode assist that costs ~70-100 cycles to save/restore
+ * the upper 128 bits.
+ *
+ * The `vzeroupper` instruction (intrinsic: _mm256_zeroupper) zeros out the
+ * top half of all YMM registers, marking the state as "clean" and avoiding
+ * this penalty.
+ *
+ * @note Modern compilers (GCC 8+, Clang 6+, MSVC 2017+) handle this
+ * automatically (Vzeroupper placement pass). Define this
+ * manually for older compilers.
+ */
+#if NEED_AVX_ZEROUPPER == 1
+#define AVX_ZEROUPPER()                                                                                                \
+	do                                                                                                             \
+	{                                                                                                              \
+		_mm256_zeroupper();                                                                                    \
+	} while (0)
+#else
+#define AVX_ZEROUPPER() ((void) (0))
+#endif // NEED_AVX_ZEROUPPER == 1
 
 /**
  * @def UNLIKELY
@@ -79,7 +133,7 @@
  *
  * Defined as @c sizeof(__m512), i.e. 64 bytes.
  */
-#define N_ALIGNMENT sizeof(__m512)
+static constexpr uint32_t N_ALIGNMENT = sizeof(__m512);
 
 /**
  * @def N_SIMD
@@ -87,7 +141,7 @@
  *
  * For AVX-512F @c __m512 this is 16 floats.
  */
-#define N_SIMD (N_ALIGNMENT / sizeof(float))
+static constexpr uint32_t N_SIMD = (N_ALIGNMENT / sizeof(float));
 
 /**
  * @brief Compute the absolute peak (max |x|) of a buffer using AVX-512F.
@@ -135,6 +189,7 @@ x86_avx512f_compute_peak(const float* src, uint32_t nframes, float current)
 			zmax = _mm512_max_ps(zmax, x);
 		}
 
+		AVX_ZEROUPPER();
 		return _mm512_reduce_max_ps(zmax);
 	}
 
@@ -173,7 +228,7 @@ x86_avx512f_compute_peak(const float* src, uint32_t nframes, float current)
 			const float* ptr = src_aligned + offset;
 
 			// Prefetch the next further data
-			_mm_prefetch((const char*) (ptr + 4 * n_iter), _MM_HINT_T0);
+			// _mm_prefetch((const char*) (ptr + 4 * n_iter), _MM_HINT_T0);
 
 			__m512 x0, x1, x2, x3, x4, x5, x6, x7;
 			__m512 zmax0, zmax1, zmax2, zmax3;
@@ -236,13 +291,7 @@ x86_avx512f_compute_peak(const float* src, uint32_t nframes, float current)
 	// Get the max of the ZMM registers
 	current = _mm512_reduce_max_ps(zmax);
 
-#if defined(__GNUC__) && (__GNUC__ < 8)
-	// There's a penalty going from AVX mode to SSE mode. This can
-	// be avoided by ensuring the CPU that rest of the routine is no
-	// longer interested in the upper portion of the YMM register.
-
-	_mm256_zeroupper(); // zeros the upper portion of YMM register
-#endif
+	AVX_ZEROUPPER();
 	return current;
 }
 
@@ -270,21 +319,21 @@ x86_avx512f_find_peaks(const float* src, uint32_t nframes, float* minf, float* m
 	__m512 zmax = _mm512_set1_ps(*maxf);
 
 	uint32_t simd_count, nframes_simd, nframes_rem, start;
-	const float *src_aligned;
+	const float* src_aligned;
 
 	// For small buffer size, just process unaligned samples
 	if (nframes <= 64)
 	{
 		uint32_t i = 0;
 
-		while (nframes >= 16)
+		while (nframes >= N_SIMD)
 		{
 			__m512 x = _mm512_loadu_ps(src + i);
 			zmax = _mm512_max_ps(zmax, x);
 			zmin = _mm512_min_ps(zmin, x);
 
-			i += 16;
-			nframes -= 16;
+			i += N_SIMD;
+			nframes -= N_SIMD;
 		}
 
 		if (nframes)
@@ -295,7 +344,7 @@ x86_avx512f_find_peaks(const float* src, uint32_t nframes, float* minf, float* m
 			zmin = _mm512_min_ps(zmin, x);
 		}
 
-		goto reduce_max_and_return;
+		goto reduce_min_max_and_return;
 	}
 
 	// Compute the next aligned pointer
@@ -336,7 +385,7 @@ x86_avx512f_find_peaks(const float* src, uint32_t nframes, float* minf, float* m
 			const float* ptr = src_aligned + n_iter * i;
 
 			// Prefetch distance in number of floats
-			_mm_prefetch((const char*) (ptr + 4 * n_iter), _MM_HINT_T0);
+			// _mm_prefetch((const char*) (ptr + 4 * n_iter), _MM_HINT_T0);
 
 			__m512 x0, x1, x2, x3, x4, x5, x6, x7;
 			__m512 zmin0, zmin1, zmin2, zmin3;
@@ -395,18 +444,12 @@ x86_avx512f_find_peaks(const float* src, uint32_t nframes, float* minf, float* m
 		zmin = _mm512_min_ps(zmin, x0);
 	}
 
-reduce_max_and_return:
+reduce_min_max_and_return:
 
 	*minf = _mm512_reduce_min_ps(zmin);
 	*maxf = _mm512_reduce_max_ps(zmax);
 
-#if defined(__GNUC__) && (__GNUC__ < 8)
-	// There's a penalty going from AVX mode to SSE mode. This can
-	// be avoided by ensuring the CPU that rest of the routine is no
-	// longer interested in the upper portion of the YMM register.
-
-	_mm256_zeroupper(); // zeros the upper portion of YMM register
-#endif
+	AVX_ZEROUPPER();
 	return;
 }
 
@@ -425,114 +468,64 @@ reduce_max_and_return:
 C_FUNC void
 x86_avx512f_apply_gain_to_buffer(float* dst, uint32_t nframes, float gain)
 {
-	// Compute the next aligned pointer
-	float* dst_aligned = (float*) ALIGN_PTR_NEXT(dst, N_ALIGNMENT);
+	constexpr uint32_t UNROLL_COUNT = 4 * N_SIMD;
 
 	// Broadcast gain to all elements in ZMM register
 	__m512 zgain = _mm512_set1_ps(gain);
 
-	// Process misaligned samples before the first aligned address
-	if (UNLIKELY(dst_aligned > dst))
+	uint32_t i = 0;
+
+	while (nframes >= UNROLL_COUNT)
 	{
-		// Unaligned samples to process
-		size_t unaligned_count = dst_aligned - dst;
+		__m512 x0, x1, x2, x3;
+		float* ptr = dst + i;
 
-		// Handle small number of nframes
-		size_t count = std::min<size_t>(unaligned_count, nframes);
+		// Load
+		x0 = _mm512_loadu_ps(ptr + (0 * N_SIMD));
+		x1 = _mm512_loadu_ps(ptr + (1 * N_SIMD));
+		x2 = _mm512_loadu_ps(ptr + (2 * N_SIMD));
+		x3 = _mm512_loadu_ps(ptr + (3 * N_SIMD));
 
-		// Load first few elements with mask
-		__mmask16 load_mask = (1 << count) - 1;
-		__m512 x = _mm512_maskz_loadu_ps(load_mask, dst);
-		__m512 y = _mm512_mul_ps(zgain, x);
+		// Multiply by gain
+		x0 = _mm512_mul_ps(zgain, x0);
+		x1 = _mm512_mul_ps(zgain, x1);
+		x2 = _mm512_mul_ps(zgain, x2);
+		x3 = _mm512_mul_ps(zgain, x3);
 
-		// Store the elements back into memory
-		_mm512_mask_storeu_ps(dst, load_mask, y);
+		// Store
+		_mm512_storeu_ps(ptr + (0 * N_SIMD), x0);
+		_mm512_storeu_ps(ptr + (1 * N_SIMD), x1);
+		_mm512_storeu_ps(ptr + (2 * N_SIMD), x2);
+		_mm512_storeu_ps(ptr + (3 * N_SIMD), x3);
 
-		nframes -= count;
+		i += UNROLL_COUNT;
+		nframes -= UNROLL_COUNT;
 	}
 
-	// Compute the number of SIMD frames
-	size_t simd_count = nframes / N_SIMD;
-	size_t nframes_simd = N_SIMD * simd_count;
-	size_t nframes_rem = nframes - nframes_simd;
-	size_t start = 0;
-
-	if (simd_count >= 8)
+	while (nframes >= N_SIMD)
 	{
-		const size_t n_loop = 8;
-		const size_t n_iter = n_loop * N_SIMD;
-		const size_t unrolled_count = simd_count / n_loop;
+		float* ptr = dst + i;
+		__m512 x = _mm512_loadu_ps(ptr);
 
-		for (size_t i = 0; i < unrolled_count; ++i)
-		{
-			float* ptr = dst_aligned + (i * n_iter);
+		x = _mm512_mul_ps(zgain, x);
 
-			__m512 x0, x1, x2, x3, x4, x5, x6, x7;
+		_mm512_storeu_ps(ptr, x);
 
-			// Prefetch distance in number of floats
-			_mm_prefetch((const char*) (ptr + 4 * n_iter), _MM_HINT_T0);
-
-			// Load data from memory
-			x0 = _mm512_load_ps(ptr + (0 * N_SIMD));
-			x1 = _mm512_load_ps(ptr + (1 * N_SIMD));
-			x2 = _mm512_load_ps(ptr + (2 * N_SIMD));
-			x3 = _mm512_load_ps(ptr + (3 * N_SIMD));
-			x4 = _mm512_load_ps(ptr + (4 * N_SIMD));
-			x5 = _mm512_load_ps(ptr + (5 * N_SIMD));
-			x6 = _mm512_load_ps(ptr + (6 * N_SIMD));
-			x7 = _mm512_load_ps(ptr + (7 * N_SIMD));
-
-			// Multiply by gain
-			x0 = _mm512_mul_ps(zgain, x0);
-			x1 = _mm512_mul_ps(zgain, x1);
-			x2 = _mm512_mul_ps(zgain, x2);
-			x3 = _mm512_mul_ps(zgain, x3);
-			x4 = _mm512_mul_ps(zgain, x4);
-			x5 = _mm512_mul_ps(zgain, x5);
-			x6 = _mm512_mul_ps(zgain, x6);
-			x7 = _mm512_mul_ps(zgain, x7);
-
-			// Store results back to memory
-			_mm512_store_ps(ptr + (0 * N_SIMD), x0);
-			_mm512_store_ps(ptr + (1 * N_SIMD), x1);
-			_mm512_store_ps(ptr + (2 * N_SIMD), x2);
-			_mm512_store_ps(ptr + (3 * N_SIMD), x3);
-			_mm512_store_ps(ptr + (4 * N_SIMD), x4);
-			_mm512_store_ps(ptr + (5 * N_SIMD), x5);
-			_mm512_store_ps(ptr + (6 * N_SIMD), x6);
-			_mm512_store_ps(ptr + (7 * N_SIMD), x7);
-		}
-
-		start += unrolled_count * n_loop;
+		i += N_SIMD;
+		nframes -= N_SIMD;
 	}
 
-	// Process remaining SIMD frames 16 at a time
-	for (size_t i = start; i < simd_count; ++i)
+	if (nframes)
 	{
-		size_t offset = N_SIMD * i;
-		__m512 x, y;
-		x = _mm512_load_ps(dst_aligned + offset);
-		y = _mm512_mul_ps(zgain, x);
-		_mm512_store_ps(dst_aligned + offset, y);
+		float* ptr = dst + i;
+		__mmask16 m = (__mmask16) ((1U << nframes) - 1U);
+
+		__m512 x = _mm512_maskz_loadu_ps(m, ptr);
+		x = _mm512_mul_ps(zgain, x);
+		_mm512_mask_storeu_ps(ptr, m, x);
 	}
 
-	// Process remaining samples
-	if (nframes_rem > 0)
-	{
-		// Create a mask for loading remaining samples
-		__mmask16 load_mask = (1 << nframes_rem) - 1;
-		__m512 x = _mm512_maskz_load_ps(load_mask, dst_aligned + nframes_simd);
-		__m512 y = _mm512_mul_ps(zgain, x);
-		_mm512_mask_store_ps(dst_aligned + nframes_simd, load_mask, y);
-	}
-
-#if defined(__GNUC__) && (__GNUC__ < 8)
-	// There's a penalty going from AVX mode to SSE mode. This can
-	// be avoided by ensuring the CPU that rest of the routine is no
-	// longer interested in the upper portion of the YMM register.
-
-	_mm256_zeroupper(); // zeros the upper portion of YMM register
-#endif
+	AVX_ZEROUPPER();
 	return;
 }
 
@@ -646,13 +639,7 @@ x86_avx512f_mix_buffers_with_gain(float* __restrict dst, const float* __restrict
 		_mm512_mask_storeu_ps(dst + nframes_simd, load_mask, y);
 	}
 
-#if defined(__GNUC__) && (__GNUC__ < 8)
-	// There's a penalty going from AVX mode to SSE mode. This can
-	// be avoided by ensuring the CPU that rest of the routine is no
-	// longer interested in the upper portion of the YMM register.
-
-	_mm256_zeroupper(); // zeros the upper portion of YMM register
-#endif
+	AVX_ZEROUPPER();
 	return;
 }
 
@@ -761,13 +748,7 @@ x86_avx512f_mix_buffers_no_gain(float* __restrict dst, const float* __restrict s
 		_mm512_mask_storeu_ps(dst + nframes_simd, load_mask, y);
 	}
 
-#if defined(__GNUC__) && (__GNUC__ < 8)
-	// There's a penalty going from AVX mode to SSE mode. This can
-	// be avoided by ensuring the CPU that rest of the routine is no
-	// longer interested in the upper portion of the YMM register.
-
-	_mm256_zeroupper(); // zeros the upper portion of YMM register
-#endif
+	AVX_ZEROUPPER();
 	return;
 }
 

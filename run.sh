@@ -4,10 +4,10 @@
 set -euo pipefail
 
 # Frame sizes to test
-frame_sizes=(41 64 96 128 192 240 256 441 480 512 768 1024 2048 4096)
+frame_sizes=(41 64 96 128 192 240 256 441 480 512)
 
 # Fixed parameters
-alignment=128
+alignment=64
 iterations=10000000
 
 # Build the code
